@@ -11,6 +11,7 @@ import dns.message
 import dns.rdatatype
 import code
 import ipaddress
+import uvloop
 
 import sys 
 sys.path.append("/home/drew/src/arpc")
@@ -208,6 +209,7 @@ async def setup(dbfilename):
 
 dbfilename = "/home/drew/bindrev.db"
 
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 loop = asyncio.get_event_loop()
 loop.run_until_complete(setup(dbfilename))
 loop.run_forever()
