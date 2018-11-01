@@ -211,7 +211,7 @@ async def setup(dbfilename):
 
     signal.signal(signal.SIGINT, signal_handler)
 
-dbfilename = "/home/drew/bindrev.db"
+dbfilename = "/home/drew/bindrev"
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 loop = asyncio.get_event_loop()
