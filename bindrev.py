@@ -141,7 +141,8 @@ class ReverseLookup:
             self.lookup[ip] = domain
             self.db[ip] = domain
 
-    def get(self, ip):
+    def get(self, ip_):
+        ip = ipaddress.ip_address(ip_).compressed
         if (ip in self.lookup):
             return self.lookup[ip]
         elif (ip in self.db):
@@ -198,7 +199,7 @@ async def setup(dbfilename):
         return lookup.get(ip)
 
     loop = asyncio.get_event_loop()
-    requestServer = arpc.arpc.ArpcServer(loop, '127.0.0.1', 8888, requestHandler)
+    requestServer = arpc.arpc.ArpcServer(loop, '0.0.0.0', 8888, requestHandler)
     await requestServer.start()
 
     def signal_handler(sig, frame):
