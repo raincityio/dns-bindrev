@@ -196,7 +196,10 @@ async def setup(dbfilename):
     await frameStreamServer.start()
 
     async def requestHandler(session, ip):
-        return lookup.get(ip)
+        try:
+            return lookup.get(ip)
+        except:
+            return None
 
     loop = asyncio.get_event_loop()
     requestServer = arpc.arpc.ArpcServer(loop, '0.0.0.0', 8888, requestHandler)
