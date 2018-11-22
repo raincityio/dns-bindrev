@@ -1,0 +1,33 @@
+!/bin/sh
+
+# PROVIDE: bindrev
+# BEFORE: named
+
+. /etc/rc.subr
+
+name="bindrev"
+rcvar="${name}_enabled"
+start_cmd="${name}_start"
+stop_cmd="${name}_stop"
+
+command="/home/drew/bindrev/bindrev.py"
+pidfile="/var/run/bindrev.pid"
+
+bindrev_start()
+{
+    echo "Starting bindrev"
+    echo "****" >> /tmp/procs
+    ps aux >> /tmp/procs
+    /usr/sbin/daemon -u drew -o /var/log/bindrev.log -p $pidfile $command
+    echo "^^^^" >> /tmp/procs
+    ps aux >> /tmp/procs
+}
+
+bindrev_stop()
+{
+    echo "Stopping bindrev"
+    pkill -P $(cat $pidfile)
+}
+
+load_rc_config $name
+run_rc_command "$1"
