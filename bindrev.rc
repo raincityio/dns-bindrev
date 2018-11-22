@@ -1,4 +1,4 @@
-!/bin/sh
+#!/bin/sh
 
 # PROVIDE: bindrev
 # BEFORE: named
@@ -21,12 +21,17 @@ bindrev_start()
     /usr/sbin/daemon -u drew -o /var/log/bindrev.log -p $pidfile $command
     echo "^^^^" >> /tmp/procs
     ps aux >> /tmp/procs
+    export PATH=/usr/local/bin:$PATH
+    while ! /home/drew/bindrev/bindrev_client.py 127.0.0.1 >/dev/null 2>&1; do
+        echo "Waiting for server start"
+        sleep 1
+    done
 }
 
 bindrev_stop()
 {
     echo "Stopping bindrev"
-    pkill -P $(cat $pidfile)
+    pkill -TERM -P $(cat $pidfile)
 }
 
 load_rc_config $name
