@@ -18,6 +18,8 @@ sys.path.append("/home/drew/src/arpc")
 import arpc
 import arpc.arpc
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s]: %(message)s')
+
 class Frame:
 
     control = 0
@@ -133,11 +135,11 @@ class ReverseLookup:
         if (ip in self.lookup):
             current = self.lookup[ip]
             if (not current == domain):
-                print("Replacing %s[%s] -> %s [count=%s]" % (ip, current, domain, len(self.lookup)))
+                logging.info("Replacing %s[%s] -> %s [count=%s]" % (ip, current, domain, len(self.lookup)))
                 self.lookup[ip] = domain
                 self.db[ip] = domain
         else:
-            print("%s -> %s [count=%s]" % (ip, domain, len(self.lookup)))
+            logging.info("%s -> %s [count=%s]" % (ip, domain, len(self.lookup)))
             self.lookup[ip] = domain
             self.db[ip] = domain
 
