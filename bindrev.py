@@ -198,6 +198,8 @@ async def setup(dbfilename):
     await frameStreamServer.start()
 
     async def requestHandler(session, ip):
+        if ip == "test":
+            return None
         try:
             return lookup.get(ip)
         except:
@@ -212,6 +214,7 @@ async def setup(dbfilename):
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
 dbfilename = "/home/drew/bindrev"
 

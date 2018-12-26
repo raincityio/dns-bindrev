@@ -19,7 +19,7 @@ bindrev_start()
     export PATH=/usr/local/bin:$PATH
     /usr/sbin/daemon -u drew -o /var/log/bindrev.log -p $pidfile $command
     i=0
-    while ! /home/drew/bindrev/bindrev_client.py 127.0.0.1 >/dev/null 2>&1; do
+    while ! /home/drew/bindrev/bindrev_client.py test >/dev/null 2>&1; do
         echo "Waiting for server start"
         sleep 1
         i=`echo $i+1|bc`
@@ -33,7 +33,7 @@ bindrev_start()
 bindrev_stop()
 {
     echo "Stopping bindrev"
-    pkill -TERM -P $(cat $pidfile)
+    kill $(cat $pidfile)
 }
 
 load_rc_config $name

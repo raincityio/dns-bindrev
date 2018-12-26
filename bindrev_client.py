@@ -13,7 +13,10 @@ client.connect()
 
 reply = client.sendRequest(sys.argv[1])
 if (not reply):
-    r = 1
+    if sys.argv[1] == "test":
+        r = 0
+    else:
+        r = 1
 else:
     r = 0
     print(reply)
