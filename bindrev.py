@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import json
 import signal
 import shelve
 import struct
@@ -12,11 +13,16 @@ import dns.rdatatype
 import code
 import ipaddress
 import uvloop
+import threading
+import mysql.connector as mysql
 
 import sys 
 sys.path.append("/home/drew/src/arpc")
 import arpc
 import arpc.arpc
+
+sys.path.append("/home/drew/rpycon")
+from rpycon import remote
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s]: %(message)s')
 
@@ -121,11 +127,111 @@ class UnixFrameStreamServer:
         handler = FrameStreamReader(self.callback, reader, writer)
         await handler.loop()
 
+class EchoDb:
+
+    def __init__(self):
+        pass
+
+    def close(self):
+        pass
+
+    def __getitem__(self, key):
+        raise KeyError
+
+    def __setitem__(self, key, value):
+        print("%s = %s" % (key, value))
+
+    def __contains__(self, key):
+        return False
+
+class MyDb:
+
+    def __init__(self):
+        self.con = None
+
+    def close(self):
+        if not self.con is None:
+            self.con.close()
+
+    def __getcon__(self):
+        if self.con is None:
+            con = mysql.connect(host='vega', user='bindrev', password='verdnib', database='bindrev',
+                    auth_plugin='mysql_native_password')
+            self.con = con
+        return self.con
+
+    def __reset__(self):
+        self.con = None
+
+    def __getitem__(self, key):
+        try:
+            con = self.__getcon__()
+            curs = con.cursor()
+            curs.execute("SELECT resolve FROM rev WHERE ip = '%s'" % key)
+            results = curs.fetchall()
+        except Exception as e:
+            print(e)
+            self.__reset__()
+            raise KeyError
+
+        if len(results) == 0:
+            raise KeyError
+        return results[0][0]
+
+    def __setitem__(self, key, value):
+        try:
+            con = self.__getcon__()
+            curs = con.cursor()
+            curs.execute("INSERT IGNORE INTO bindrev.rev (ip, resolve) VALUES ('%s', '%s')" % (key, value))
+            con.commit()
+        except Exception as e:
+            print(e)
+            self.__reset__()
+
+    def __contains__(self, key):
+        try:
+            self.__getitem__(key)
+            return True
+        except KeyError:
+            return False 
+
+class BlahDb:
+
+    def __init__(self):
+        self.db = '/home/drew/blah.db'
+        self.n = 0
+        try:
+            with open(self.db, 'r') as blahdb:
+                self.blah = json.loads(blahdb.read())
+        except Exception as e:
+            self.blah = {}
+
+    def close(self):
+        self.__write__()
+
+    def __write__(self):
+        with open(self.db, 'w') as blahdb:
+            blahdb.write(json.dumps(self.blah))
+
+    def __getitem__(self, key):
+        return self.blah[key]
+
+    def __setitem__(self, key, value):
+        self.blah[key] = value
+        self.n += 1
+        if ( self.n >= 100 ):
+            self.__write__()
+            self.n = 0
+
+    def __contains__(self, key):
+        return key in self.blah
+
 class ReverseLookup:
 
     def __init__(self, dbfilename):
         self.lookup = {}
-        self.db = shelve.open(dbfilename)
+#        self.db = shelve.open(dbfilename)
+        self.db = MyDb()
 
     def close(self):
         self.db.close()
@@ -216,9 +322,15 @@ async def setup(dbfilename):
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-dbfilename = "/home/drew/bindrev"
+if __name__ == "__main__":
 
-asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-loop = asyncio.get_event_loop()
-loop.run_until_complete(setup(dbfilename))
-loop.run_forever()
+    dbfilename = "/home/drew/bindrev"
+
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    loop = asyncio.get_event_loop()
+
+    rc = remote.RemoteConsole(globals_={"loop": loop})
+    threading.Thread(target=rc.start).start()
+
+    loop.run_until_complete(setup(dbfilename))
+    loop.run_forever()
