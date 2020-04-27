@@ -300,7 +300,7 @@ async def setup(dbfilename):
                         else:
                             pass
 
-    frameStreamServer = UnixFrameStreamServer("/tmp/test.sock", callback)
+    frameStreamServer = UnixFrameStreamServer("/var/run/bindrev.sock", callback)
     await frameStreamServer.start()
 
     async def requestHandler(session, ip):
