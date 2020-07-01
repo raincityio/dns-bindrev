@@ -329,8 +329,8 @@ if __name__ == "__main__":
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
     loop = asyncio.get_event_loop()
 
-    rc = remote.RemoteConsole(globals_={"loop": loop})
-    threading.Thread(target=rc.start).start()
+#    rc = remote.RemoteConsole(globals_={"loop": loop})
+#    threading.Thread(target=rc.start).start()
 
     loop.run_until_complete(setup(dbfilename))
     loop.run_forever()

@@ -1,6 +1,7 @@
 #!/bin/sh
 
 # PROVIDE: bindrev
+# REQUIRE: NETWORKING ldconfig syslogd
 # BEFORE: named
 
 . /etc/rc.subr
@@ -9,16 +10,16 @@ name="bindrev"
 rcvar="${name}_enabled"
 start_cmd="${name}_start"
 
-command="/home/drew/bindrev/bindrev.py"
+command="/home/drew/bindrev/bin/bindrev"
 pidfile="/var/run/bindrev.pid"
 
 bindrev_start()
 {
     echo "Starting bindrev"
     export PATH=/usr/local/bin:$PATH
-    /usr/sbin/daemon -c -S -T bindrev -t bindrev -P $pidfile $command
+    /usr/sbin/daemon -S -T bindrev -c -t bindrev -P $pidfile $command
     i=0
-    while ! /home/drew/bindrev/bindrev_client.py test >/dev/null 2>&1; do
+    while ! /home/drew/bindrev/bin/bindrev_client; do
         echo "Waiting for server start"
         sleep 1
         i=`echo $i+1|bc`
