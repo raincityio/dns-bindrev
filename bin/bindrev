@@ -167,10 +167,10 @@ class MyDb:
         try:
             con = self.__getcon__()
             curs = con.cursor()
-            curs.execute("SELECT resolve FROM rev WHERE ip = '%s'" % key)
+            curs.execute("SELECT domain FROM ips WHERE ip = %s AND latest = TRUE", (key,))
             results = curs.fetchall()
         except Exception as e:
-            print(e)
+            logging.info(e)
             self.__reset__()
             raise KeyError
 
@@ -182,10 +182,26 @@ class MyDb:
         try:
             con = self.__getcon__()
             curs = con.cursor()
-            curs.execute("INSERT IGNORE INTO bindrev.rev (ip, resolve) VALUES ('%s', '%s')" % (key, value))
+            curs.execute("SELECT id, latest FROM bindrev.ips WHERE ip = %s AND domain = %s", (key, value,))
+            results = curs.fetchall()
+            update_others = False
+            if len(results) == 0:
+                curs.execute("INSERT INTO bindrev.ips (ip, domain, latest) VALUES (%s, %s, TRUE)", (key, value,))
+                update_others = True
+            elif len(results) == 1:
+                _id = results[0][0]
+                latest = results[0][1]
+                if latest == False:
+                    curs.execute("UPDATE bindrev.ips SET latest = TRUE WHERE id = %s" % (_id,))
+                    update_others = True
+            else:
+                raise Exception("unexpected result count")
+            if update_others:
+                curs.execute("UPDATE bindrev.ips SET latest = FALSE WHERE ip = %s AND domain <> %s", (key, value,))
+
             con.commit()
         except Exception as e:
-            print(e)
+            logging.info(e)
             self.__reset__()
 
     def __contains__(self, key):
