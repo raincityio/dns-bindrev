@@ -10,9 +10,7 @@ CREATE TABLE IF NOT EXISTS IPS (
 );
 
 CREATE USER IF NOT EXISTS 'bindrev'@'%' IDENTIFIED WITH mysql_native_password BY 'verdnib';
-GRANT SELECT, INSERT ON bindrev.rev TO 'bindrev'@'%';
 GRANT SELECT, INSERT, UPDATE ON bindrev.ips TO 'bindrev'@'%';
 
 CREATE USER IF NOT EXISTS 'bindrevro'@'%' IDENTIFIED WITH mysql_native_password BY 'verdnib';
-GRANT SELECT ON bindrev.rev TO 'bindrevro'@'%';
 GRANT SELECT ON bindrev.ips TO 'bindrevro'@'%';
