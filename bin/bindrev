@@ -236,16 +236,19 @@ class ReverseLookup:
     def close(self):
         self.db.close()
         
-    def add(self, ip_, domain):
+    def add(self, ip_, domain, addr):
+        addr = ipaddress.ip_address(addr)
         ip = ipaddress.ip_address(ip_).compressed
         if (ip in self.lookup):
             current = self.lookup[ip]
-            if (not current == domain):
-                logging.info("Replacing %s[%s] -> %s [count=%s]" % (ip, current, domain, len(self.lookup)))
+            if current == domain:
+                logging.info("Keeping %s[%s] -> %s [count=%s] (%s)" % (ip, current, domain, len(self.lookup), addr))
+            else:
+                logging.info("Replacing %s[%s] -> %s [count=%s] (%s)" % (ip, current, domain, len(self.lookup), addr))
                 self.lookup[ip] = domain
                 self.db[ip] = domain
         else:
-            logging.info("%s -> %s [count=%s]" % (ip, domain, len(self.lookup)))
+            logging.info("Creating %s -> %s [count=%s] (%s)" % (ip, domain, len(self.lookup), addr))
             self.lookup[ip] = domain
             self.db[ip] = domain
 
@@ -271,6 +274,8 @@ async def setup(dbfilename):
         dnstap.ParseFromString(frame.payload)
         message = dnstap.message
         if (message.type == dnstap_pb2.Message.CLIENT_RESPONSE):
+#            addr = ipaddress.ip_address(message.query_address)
+#            logging.info("client_response: %s" % addr)
             m = dns.message.from_wire(message.response_message)
             linker = {}
             for answer in m.answer:
@@ -294,11 +299,22 @@ async def setup(dbfilename):
                     for item in linker[name]:
                         itemname = str(item)
                         if (item.rdtype in [dns.rdatatype.A, dns.rdatatype.AAAA]):
-                            lookup.add(itemname, questionname)
+                            lookup.add(itemname, questionname, message.query_address)
                         elif (item.rdtype in [dns.rdatatype.PTR, dns.rdatatype.CNAME]):
                             q.append(itemname)
                         else:
                             pass
+#        elif (message.type == dnstap_pb2.Message.RESOLVER_QUERY):
+#            addr = ipaddress.ip_address(message.response_address)
+#            logging.info("resolver_query: %s" % addr)
+#        elif (message.type == dnstap_pb2.Message.CLIENT_QUERY):
+#            addr = ipaddress.ip_address(message.response_address)
+#            logging.info("client_query: %s" % addr)
+#        elif (message.type == dnstap_pb2.Message.RESOLVER_RESPONSE):
+#            addr = ipaddress.ip_address(message.response_address)
+#            logging.info("resolver_response: %s" % addr)
+#        else:
+#            logging.info("unknown: %s" % message.type)
 
     frameStreamServer = UnixFrameStreamServer("/var/run/bindrev.sock", callback)
     await frameStreamServer.start()
