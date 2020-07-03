@@ -14,3 +14,5 @@ GRANT SELECT, INSERT, UPDATE ON bindrev.ips TO 'bindrev'@'%';
 
 CREATE USER IF NOT EXISTS 'bindrevro'@'%' IDENTIFIED WITH mysql_native_password BY 'verdnib';
 GRANT SELECT ON bindrev.ips TO 'bindrevro'@'%';
+
+CREATE INDEX ip ON ips (ip);

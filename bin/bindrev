@@ -1,9 +1,9 @@
 #!/usr/bin/env python3.7
 
+import time
 import json
 import signal
 import shelve
-import struct
 import dnstap_pb2
 import asyncio
 import ipaddress
@@ -15,6 +15,7 @@ import ipaddress
 import uvloop
 import threading
 import mysql.connector as mysql
+import frames
 
 import sys 
 sys.path.append("/home/drew/src/arpc")
@@ -26,123 +27,53 @@ from rpycon import remote
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s]: %(message)s')
 
-class Frame:
+class BufferedDb:
 
-    control = 0
-    data = 1
-
-    def __init__(self, frame_type):
-        self.type = frame_type
-
-    @staticmethod
-    async def decodeFromWire(reader):
-        frame_sz_raw = await reader.readexactly(4)
-        (frame_sz,) = struct.unpack("!I", frame_sz_raw)
-        if (frame_sz == 0):
-            frame = await ControlFrame.decodeFromWire(reader)
-        else:
-            frame = await DataFrame.decodeFromWire(reader, frame_sz)
-        return frame
-
-class ControlFrame(Frame):
-
-    accept = 0x01
-    start = 0x02
-    stop = 0x03
-    ready = 0x04
-    finish = 0x05
-
-    def __init__(self, control_frame_type):
-        Frame.__init__(self, Frame.control)
-        self.control_type = control_frame_type
-
-    def encodeToWire(self, writer):
-        data = struct.pack("!I", self.control_type)
-        writer.write(struct.pack("!II", 0, len(data)))
-        writer.write(data)
-
-    @staticmethod
-    async def decodeFromWire(reader):
-        cframe_header = await reader.readexactly(8)
-        (cframe_sz, cframe_type,) = struct.unpack("!II", cframe_header)
-        cframe_len = cframe_sz - 4
-        data = await reader.readexactly(cframe_len)
-        return ControlFrame(cframe_type)
-
-class DataFrame(Frame):
-
-    def __init__(self, payload):
-        Frame.__init__(self, Frame.data)
-        self.payload = payload
-
-    @staticmethod
-    async def decodeFromWire(reader, frame_sz):
-        payload = await reader.readexactly(frame_sz)
-        return DataFrame(payload)
-
-class FrameStreamReader:
-
-    def __init__(self, callback, reader, writer):
-        self.callback = callback
-        self.reader = reader
-        self.writer = writer
-        self.bi = True
-
-    async def loop(self):
-        processStream = True
-        while processStream:
-            frame = await Frame.decodeFromWire(self.reader)
-            if (frame.type == Frame.control):
-                if (frame.control_type == ControlFrame.start):
-                    pass
-                elif (frame.control_type == ControlFrame.stop):
-                    if (self.bi):
-                        finish = ControlFrame(ControlFrame.finish)
-                        finish.encodeToWire(self.writer)
-                    processStream = False
-                elif (frame.control_type == ControlFrame.ready):
-                    if (self.bi):
-                        accept = ControlFrame(ControlFrame.accept)
-                        accept.encodeToWire(self.writer)
-                else:
-                    raise Exception("Unexpected control frame: %s" % type(frame))
-            elif (frame.type == Frame.data):
-                try:
-                    self.callback(frame)
-                except Exception as e:
-                    logging.error(e)
-            else:
-                raise Exception("Unknown frame type: %s" % type(frame))
-
-class UnixFrameStreamServer:
-
-    def __init__(self, path, callback):
-        self.path = path
-        self.callback = callback
-
-    async def start(self):
-        await asyncio.start_unix_server(self.__handle__, path=self.path)
-
-    async def __handle__(self, reader, writer):
-        handler = FrameStreamReader(self.callback, reader, writer)
-        await handler.loop()
-
-class EchoDb:
-
-    def __init__(self):
-        pass
+    def __init__(self, db):
+        self.db = db
+        self.ips = {}
 
     def close(self):
-        pass
+        self.db.close()
 
     def __getitem__(self, key):
-        raise KeyError
+        if key in self.ips:
+            for kv in self.ips[key].items():
+                if kv[1] == True:
+                    return kv[0]
+            raise Exception("key present, but latest not found") 
+        else:
+            return self.db[key]
 
     def __setitem__(self, key, value):
-        print("%s = %s" % (key, value))
+        if key in self.ips:
+            self.ips[key][value] = True
+            for domain in self.ips[key]:
+                if domain != value:
+                    self.ips[key][domain] = False
+        else:
+            self.ips[key] = {
+                value: True
+            }
 
     def __contains__(self, key):
-        return False
+        try:
+            self.__getitem__(key)
+            return True
+        except KeyError:
+            return False
+
+    def flush(self):
+        updates = []
+        for ip in self.ips:
+            for (domain, latest) in self.ips[ip].items():
+                if latest:
+                    latest_domain = domain
+                else:
+                    updates.append((ip, domain,))
+            updates.append((ip, latest_domain,))
+        self.db.set_items(updates)
+        self.ips = {}
 
 class MyDb:
 
@@ -169,19 +100,32 @@ class MyDb:
             curs = con.cursor()
             curs.execute("SELECT domain FROM ips WHERE ip = %s AND latest = TRUE", (key,))
             results = curs.fetchall()
-        except Exception as e:
-            logging.info(e)
+        except:
             self.__reset__()
-            raise KeyError
+            raise
 
         if len(results) == 0:
             raise KeyError
         return results[0][0]
 
     def __setitem__(self, key, value):
+        self.set_items([(key, value,)])
+
+    def set_items(self, items):
+        start = time.time()
         try:
             con = self.__getcon__()
             curs = con.cursor()
+            self._set_items(curs, items)
+            con.commit()
+        except:
+            self.__reset__()
+            raise
+        stop = time.time()
+#        logging.info("set_item: %s" % (stop - start))
+
+    def _set_items(self, curs, items):
+        for (key, value) in items:
             curs.execute("SELECT id, latest FROM bindrev.ips WHERE ip = %s AND domain = %s", (key, value,))
             results = curs.fetchall()
             update_others = False
@@ -198,12 +142,7 @@ class MyDb:
                 raise Exception("unexpected result count")
             if update_others:
                 curs.execute("UPDATE bindrev.ips SET latest = FALSE WHERE ip = %s AND domain <> %s", (key, value,))
-
-            con.commit()
-        except Exception as e:
-            logging.info(e)
-            self.__reset__()
-
+     
     def __contains__(self, key):
         try:
             self.__getitem__(key)
@@ -211,70 +150,39 @@ class MyDb:
         except KeyError:
             return False 
 
-class BlahDb:
-
-    def __init__(self):
-        self.db = '/home/drew/blah.db'
-        self.n = 0
-        try:
-            with open(self.db, 'r') as blahdb:
-                self.blah = json.loads(blahdb.read())
-        except Exception as e:
-            self.blah = {}
-
-    def close(self):
-        self.__write__()
-
-    def __write__(self):
-        with open(self.db, 'w') as blahdb:
-            blahdb.write(json.dumps(self.blah))
-
-    def __getitem__(self, key):
-        return self.blah[key]
-
-    def __setitem__(self, key, value):
-        self.blah[key] = value
-        self.n += 1
-        if ( self.n >= 100 ):
-            self.__write__()
-            self.n = 0
-
-    def __contains__(self, key):
-        return key in self.blah
+    def flush(self):
+        pass
 
 class ReverseLookup:
 
     def __init__(self, dbfilename):
-        self.lookup = {}
-#        self.db = shelve.open(dbfilename)
-        self.db = MyDb()
+        self.db = BufferedDb(MyDb())
+        self.next = time.time() + 60
 
     def close(self):
         self.db.close()
         
-    def add(self, ip_, domain, addr):
-        addr = ipaddress.ip_address(addr)
+    def add(self, ip_, domain, addr_):
+        if time.time() > self.next:
+            self.db.flush()
+            self.next += 60
+        addr = ipaddress.ip_address(addr_).compressed
         ip = ipaddress.ip_address(ip_).compressed
-        if (ip in self.lookup):
-            current = self.lookup[ip]
+        if ip in self.db:
+            current = self.db[ip]
             if current == domain:
-                logging.info("Keeping %s[%s] -> %s [count=%s] (%s)" % (ip, current, domain, len(self.lookup), addr))
+                logging.info("Keeping %s[%s] -> %s [count=%s] (%s)" % (ip, current, domain, 0, addr))
             else:
-                logging.info("Replacing %s[%s] -> %s [count=%s] (%s)" % (ip, current, domain, len(self.lookup), addr))
-                self.lookup[ip] = domain
+                logging.info("Updating %s[%s] -> %s [count=%s] (%s)" % (ip, current, domain, 0, addr))
                 self.db[ip] = domain
         else:
-            logging.info("Creating %s -> %s [count=%s] (%s)" % (ip, domain, len(self.lookup), addr))
-            self.lookup[ip] = domain
+            logging.info("Creating %s -> %s [count=%s] (%s)" % (ip, domain, 0, addr))
             self.db[ip] = domain
 
     def get(self, ip_):
         ip = ipaddress.ip_address(ip_).compressed
-        if (ip in self.lookup):
-            return self.lookup[ip]
-        elif (ip in self.db):
+        if ip in self.db:
             domain = self.db[ip]
-            self.lookup[ip] = domain
             return domain
         return None
 
@@ -290,8 +198,6 @@ async def setup(dbfilename):
         dnstap.ParseFromString(frame.payload)
         message = dnstap.message
         if (message.type == dnstap_pb2.Message.CLIENT_RESPONSE):
-#            addr = ipaddress.ip_address(message.query_address)
-#            logging.info("client_response: %s" % addr)
             m = dns.message.from_wire(message.response_message)
             linker = {}
             for answer in m.answer:
@@ -320,19 +226,8 @@ async def setup(dbfilename):
                             q.append(itemname)
                         else:
                             pass
-#        elif (message.type == dnstap_pb2.Message.RESOLVER_QUERY):
-#            addr = ipaddress.ip_address(message.response_address)
-#            logging.info("resolver_query: %s" % addr)
-#        elif (message.type == dnstap_pb2.Message.CLIENT_QUERY):
-#            addr = ipaddress.ip_address(message.response_address)
-#            logging.info("client_query: %s" % addr)
-#        elif (message.type == dnstap_pb2.Message.RESOLVER_RESPONSE):
-#            addr = ipaddress.ip_address(message.response_address)
-#            logging.info("resolver_response: %s" % addr)
-#        else:
-#            logging.info("unknown: %s" % message.type)
 
-    frameStreamServer = UnixFrameStreamServer("/var/run/bindrev.sock", callback)
+    frameStreamServer = frames.UnixFrameStreamServer("/var/run/bindrev.sock", callback)
     await frameStreamServer.start()
 
     async def requestHandler(session, ip):
