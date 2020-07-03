@@ -19,7 +19,7 @@ bindrev_start()
     export PATH=/usr/local/bin:$PATH
     /usr/sbin/daemon -S -T bindrev -c -t bindrev -P $pidfile $command
     i=0
-    while ! /home/drew/bindrev/bin/bindrev_client; do
+    while ! /home/drew/bindrev/bin/bindrev_client test; do
         echo "Waiting for server start"
         sleep 1
         i=`echo $i+1|bc`

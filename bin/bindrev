@@ -171,12 +171,12 @@ class ReverseLookup:
         if ip in self.db:
             current = self.db[ip]
             if current == domain:
-                logging.info("Keeping %s[%s] -> %s [count=%s] (%s)" % (ip, current, domain, 0, addr))
+                logging.debug("Keeping %s[%s] -> %s [count=%s] (%s)" % (ip, current, domain, 0, addr))
             else:
-                logging.info("Updating %s[%s] -> %s [count=%s] (%s)" % (ip, current, domain, 0, addr))
+                logging.debug("Updating %s[%s] -> %s [count=%s] (%s)" % (ip, current, domain, 0, addr))
                 self.db[ip] = domain
         else:
-            logging.info("Creating %s -> %s [count=%s] (%s)" % (ip, domain, 0, addr))
+            logging.debug("Creating %s -> %s [count=%s] (%s)" % (ip, domain, 0, addr))
             self.db[ip] = domain
 
     def get(self, ip_):
