@@ -22,10 +22,7 @@ sys.path.append("/home/drew/src/arpc")
 import arpc
 import arpc.arpc
 
-sys.path.append("/home/drew/rpycon")
-from rpycon import remote
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s]: %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s]: %(message)s')
 
 class BufferedDb:
 
@@ -34,6 +31,7 @@ class BufferedDb:
         self.ips = {}
 
     def close(self):
+        self.flush()
         self.db.close()
 
     def __getitem__(self, key):
@@ -55,6 +53,10 @@ class BufferedDb:
             self.ips[key] = {
                 value: True
             }
+
+    def set_items(self, items):
+        for (key, value) in items:
+            self[key] = value
 
     def __contains__(self, key):
         try:
@@ -122,7 +124,7 @@ class MyDb:
             self.__reset__()
             raise
         stop = time.time()
-#        logging.info("set_item: %s" % (stop - start))
+        logging.debug("set_items: %s" % (stop - start))
 
     def _set_items(self, curs, items):
         for (key, value) in items:
@@ -150,22 +152,12 @@ class MyDb:
         except KeyError:
             return False 
 
-    def flush(self):
-        pass
-
 class ReverseLookup:
 
-    def __init__(self, dbfilename):
-        self.db = BufferedDb(MyDb())
-        self.next = time.time() + 60
+    def __init__(self, db):
+        self.db = db
 
-    def close(self):
-        self.db.close()
-        
     def add(self, ip_, domain, addr_):
-        if time.time() > self.next:
-            self.db.flush()
-            self.next += 60
         addr = ipaddress.ip_address(addr_).compressed
         ip = ipaddress.ip_address(ip_).compressed
         if ip in self.db:
@@ -186,46 +178,61 @@ class ReverseLookup:
             return domain
         return None
 
-async def setup(dbfilename):
+def process_frame(lookup, frame):
+    dnstap = dnstap_pb2.Dnstap()
+    if (not dnstap.type == dnstap_pb2.Dnstap.MESSAGE):
+        logging.warn("Unknown dnstap message type: %s" % dnstap.type)
+        return
+    dnstap.ParseFromString(frame.payload)
+    message = dnstap.message
+    if (message.type == dnstap_pb2.Message.CLIENT_RESPONSE):
+        m = dns.message.from_wire(message.response_message)
+        linker = {}
+        for answer in m.answer:
+            name = str(answer.name)
+            if (not name in linker):
+                linker[name] = []
+            for item in answer.items:
+                linker[name].append(item)
+        for question in m.question:
+            if (not len(question.items) == 0):
+                raise Exception("Unexpected items under question: %s" % question)
+            if (not question.rdtype in [dns.rdatatype.A, dns.rdatatype.AAAA]):
+                continue
+            q = []
+            questionname = str(question.name)
+            q.append(questionname)
+            while (not len(q) == 0):
+                name = q.pop()
+                if (not name in linker):
+                    continue
+                for item in linker[name]:
+                    itemname = str(item)
+                    if (item.rdtype in [dns.rdatatype.A, dns.rdatatype.AAAA]):
+                        lookup.add(itemname, questionname, message.query_address)
+                    elif (item.rdtype in [dns.rdatatype.PTR, dns.rdatatype.CNAME]):
+                        q.append(itemname)
+                    else:
+                        pass
 
-    lookup = ReverseLookup(dbfilename)
+async def setup():
+
+    db = BufferedDb(MyDb())
+    async def flusher():
+        while True:
+            await asyncio.sleep(60)
+            try:
+                db.flush()
+            except Exception as e:
+                logging.error(e)
+    asyncio.create_task(flusher())
+    lookup = ReverseLookup(db)
 
     def callback(frame):
-        dnstap = dnstap_pb2.Dnstap()
-        if (not dnstap.type == dnstap_pb2.Dnstap.MESSAGE):
-            logging.warn("Unknown dnstap message type: %s" % dnstap.type)
-            return
-        dnstap.ParseFromString(frame.payload)
-        message = dnstap.message
-        if (message.type == dnstap_pb2.Message.CLIENT_RESPONSE):
-            m = dns.message.from_wire(message.response_message)
-            linker = {}
-            for answer in m.answer:
-                name = str(answer.name)
-                if (not name in linker):
-                    linker[name] = []
-                for item in answer.items:
-                    linker[name].append(item)
-            for question in m.question:
-                if (not len(question.items) == 0):
-                    raise Exception("Unexpected items under question: %s" % question)
-                if (not question.rdtype in [dns.rdatatype.A, dns.rdatatype.AAAA]):
-                    continue
-                q = []
-                questionname = str(question.name)
-                q.append(questionname)
-                while (not len(q) == 0):
-                    name = q.pop()
-                    if (not name in linker):
-                        continue
-                    for item in linker[name]:
-                        itemname = str(item)
-                        if (item.rdtype in [dns.rdatatype.A, dns.rdatatype.AAAA]):
-                            lookup.add(itemname, questionname, message.query_address)
-                        elif (item.rdtype in [dns.rdatatype.PTR, dns.rdatatype.CNAME]):
-                            q.append(itemname)
-                        else:
-                            pass
+        try:
+            process_frame(lookup, frame)
+        except Exception as e:
+            logging.error(e)
 
     frameStreamServer = frames.UnixFrameStreamServer("/var/run/bindrev.sock", callback)
     await frameStreamServer.start()
@@ -233,31 +240,22 @@ async def setup(dbfilename):
     async def requestHandler(session, ip):
         if ip == "test":
             return None
-        try:
-            return lookup.get(ip)
-        except:
-            return None
+        return lookup.get(ip)
 
     loop = asyncio.get_event_loop()
     requestServer = arpc.arpc.ArpcServer(loop, '0.0.0.0', 8888, requestHandler)
     await requestServer.start()
 
     def signal_handler(sig, frame):
-        lookup.close()
+        db.close()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
 if __name__ == "__main__":
-
-    dbfilename = "/home/drew/bindrev"
-
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
     loop = asyncio.get_event_loop()
 
-#    rc = remote.RemoteConsole(globals_={"loop": loop})
-#    threading.Thread(target=rc.start).start()
-
-    loop.run_until_complete(setup(dbfilename))
+    loop.run_until_complete(setup())
     loop.run_forever()
