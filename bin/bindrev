@@ -124,7 +124,7 @@ class MyDb:
             self.__reset__()
             raise
         stop = time.time()
-        logging.debug("set_items: %s" % (stop - start))
+        logging.debug("set_items(size=%s): %s" % (len(items), stop - start))
 
     def _set_items(self, curs, items):
         for (key, value) in items:
