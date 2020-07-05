@@ -30,14 +30,24 @@ class ControlFrame(Frame):
     ready = 0x04
     finish = 0x05
 
+    types = {
+        accept: 'accept',
+        start: 'start',
+        stop: 'stop',
+        ready: 'ready',
+        finish: 'finish'
+    }
+
     def __init__(self, control_frame_type):
         Frame.__init__(self, Frame.control)
         self.control_type = control_frame_type
 
-    def encodeToWire(self, writer):
+    async def encodeToWire(self, writer):
+        logging.debug("encoding %s" % ControlFrame.types[self.control_type])
         data = struct.pack("!I", self.control_type)
         writer.write(struct.pack("!II", 0, len(data)))
         writer.write(data)
+        await writer.drain()
 
     @staticmethod
     async def decodeFromWire(reader):
@@ -45,6 +55,7 @@ class ControlFrame(Frame):
         (cframe_sz, cframe_type,) = struct.unpack("!II", cframe_header)
         cframe_len = cframe_sz - 4
         data = await reader.readexactly(cframe_len)
+        logging.debug("decoded %s" % ControlFrame.types[cframe_type])
         return ControlFrame(cframe_type)
 
 class DataFrame(Frame):
@@ -58,40 +69,6 @@ class DataFrame(Frame):
         payload = await reader.readexactly(frame_sz)
         return DataFrame(payload)
 
-class FrameStreamReader:
-
-    def __init__(self, callback, reader, writer):
-        self.callback = callback
-        self.reader = reader
-        self.writer = writer
-        self.bi = True
-
-    async def loop(self):
-        processStream = True
-        while processStream:
-            frame = await Frame.decodeFromWire(self.reader)
-            if (frame.type == Frame.control):
-                if (frame.control_type == ControlFrame.start):
-                    pass
-                elif (frame.control_type == ControlFrame.stop):
-                    if (self.bi):
-                        finish = ControlFrame(ControlFrame.finish)
-                        finish.encodeToWire(self.writer)
-                    processStream = False
-                elif (frame.control_type == ControlFrame.ready):
-                    if (self.bi):
-                        accept = ControlFrame(ControlFrame.accept)
-                        accept.encodeToWire(self.writer)
-                else:
-                    raise Exception("Unexpected control frame: %s" % type(frame))
-            elif (frame.type == Frame.data):
-                try:
-                    self.callback(frame)
-                except Exception as e:
-                    logging.error(e)
-            else:
-                raise Exception("Unknown frame type: %s" % type(frame))
-
 class UnixFrameStreamServer:
 
     def __init__(self, path, callback):
@@ -102,5 +79,28 @@ class UnixFrameStreamServer:
         await asyncio.start_unix_server(self.__handle__, path=self.path)
 
     async def __handle__(self, reader, writer):
-        handler = FrameStreamReader(self.callback, reader, writer)
-        await handler.loop()
+        bi = True
+        processStream = True
+        while processStream:
+            frame = await Frame.decodeFromWire(reader)
+            if (frame.type == Frame.control):
+                if (frame.control_type == ControlFrame.start):
+                    pass
+                elif (frame.control_type == ControlFrame.stop):
+                    if (bi):
+                        finish = ControlFrame(ControlFrame.finish)
+                        await finish.encodeToWire(writer)
+                    processStream = False
+                elif (frame.control_type == ControlFrame.ready):
+                    if (bi):
+                        accept = ControlFrame(ControlFrame.accept)
+                        await accept.encodeToWire(writer)
+                else:
+                    raise Exception("Unexpected control frame: %s" % type(frame))
+            elif (frame.type == Frame.data):
+                try:
+                    await self.callback(frame)
+                except Exception as e:
+                    logging.error(e)
+            else:
+                raise Exception("Unknown frame type: %s" % type(frame))
