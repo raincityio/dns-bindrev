@@ -2,7 +2,6 @@
 
 import time
 import signal
-import dnstap_pb2
 import asyncio
 import logging
 import dns.message
@@ -10,6 +9,8 @@ import dns.rdatatype
 import ipaddress
 import mysql.connector as mysql
 import sys 
+
+sys.path.append('/home/drew/dnstap/bin')
 import dnstap_client
 
 class BufferedDb:
