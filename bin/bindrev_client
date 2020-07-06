@@ -34,22 +34,23 @@ class BindrevClient:
             domain = (await self.reader.readexactly(domain_sz)).decode('utf-8')
         return domain
 
+    async def __aenter__(self):
+        await self.setup()
+        return self
+
+    async def __aexit__(self, *args):
+        await self.close()
+
 async def main():
     if len(sys.argv) != 2:
         raise Exception("Please specify ip")
     ip = ipaddress.ip_address(sys.argv[1])
-
-    client = BindrevClient()
-    try:
-        await client.setup()
+    async with BindrevClient() as client:
         domain = await client.get(ip)
         if domain is None:
-            return 1
+            raise Exception("unknown ip: %s" % ip)
         else:
             print(domain)
-            return 9
-    finally:
-        await client.close()
 
 if __name__ == '__main__':
-    sys.exit(asyncio.get_event_loop().run_until_complete(main()))
+    asyncio.run(main())

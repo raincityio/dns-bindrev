@@ -89,6 +89,8 @@ class Spanner:
             for writer in self.writers:
                 try:
                     await writer.drain()
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
                     logging.error(e)
                     to_close.add(writer)

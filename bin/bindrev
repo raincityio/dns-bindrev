@@ -181,15 +181,23 @@ class Tapper:
                 ip = ipaddress.ip_address(await reader.readexactly(ip_sz))
                 try:
                     await self.callback(domain, ip)
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
                     logging.error(e)
 
         while True:
             try:
+                writer = None
                 reader, writer = await asyncio.open_connection(self.host, self.port)
                 await process(reader)
-            except (ConnectionRefusedError, asyncio.streams.IncompleteReadError) as e:
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
                 logging.error(e)
+            finally:
+                if not writer is None:
+                    writer.close()
             await asyncio.sleep(1)
 
 class BindrevServer:
@@ -211,7 +219,7 @@ class BindrevServer:
                         break
                     ip = ipaddress.ip_address(await reader.readexactly(ip_sz))
                     if ip == BindrevServer.test_ip:
-                        domain = 'localhost'
+                        domain = 'localhost.'
                     else:
                         domain = self.lookup.get(ip)
                     if domain is None:

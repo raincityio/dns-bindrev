@@ -100,6 +100,8 @@ class UnixFrameStreamServer:
             elif (frame.type == Frame.data):
                 try:
                     await self.callback(frame)
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
                     logging.error(e)
             else:
