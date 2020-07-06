@@ -45,7 +45,7 @@ def process_frame(frame):
                 for item in linker[name]:
                     itemname = str(item)
                     if (item.rdtype in [dns.rdatatype.A, dns.rdatatype.AAAA]):
-                        lookups.append((itemname, questionname,))
+                        lookups.append((questionname, itemname,))
                     elif (item.rdtype in [dns.rdatatype.PTR, dns.rdatatype.CNAME]):
                         q.append(itemname)
                     else:
@@ -69,22 +69,20 @@ class Spanner:
 
     async def loop(self):
         while True:
-            print("get")
             lookups = await self.queue.get()
-            print("got")
             to_close = set()
-            for (raw_ip, raw_domain) in lookups:
+            for (raw_domain, raw_ip) in lookups:
                 logging.debug("%s = %s" % (raw_domain, raw_ip))
-                ip = ipaddress.ip_address(raw_ip).packed
-                ip_sz = len(ip).to_bytes(1, byteorder='big')
                 domain = raw_domain.encode('utf-8')
                 domain_sz = len(domain).to_bytes(1, byteorder='big')
+                ip = ipaddress.ip_address(raw_ip).packed
+                ip_sz = len(ip).to_bytes(1, byteorder='big')
                 for writer in self.writers:
                     try:
-                        writer.write(ip_sz)
-                        writer.write(ip)
                         writer.write(domain_sz)
                         writer.write(domain)
+                        writer.write(ip_sz)
+                        writer.write(ip)
                     except Exception as e:
                         logging.error(e)
                         to_close.add(writer)
@@ -121,7 +119,11 @@ async def setup():
     signal.signal(signal.SIGTERM, signal_handler)
 
 if __name__ == "__main__":
-    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    # uvloop seems to have a bug where if the unix
+    # server is started after a queue.get await is
+    # called, then the unix server does not process
+    # connections coming in
+#    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
     loop = asyncio.get_event_loop()
 
     loop.run_until_complete(setup())

@@ -1,28 +1,55 @@
 #!/usr/bin/env python3.7
 
 import sys
-sys.path.append("/home/drew/src/arpc")
-import arpc
-import arpc.arpc
+import ipaddress
+import asyncio
 
-if (len(sys.argv) != 2):
-    raise Exception("Please specify ip")
+class BindrevClient:
 
-client = arpc.arpc.SrpcClient('127.0.0.1', 8888, None)
-client.connect()
+    def __init__(self, host='127.0.0.1', port=8888):
+        self.host = host
+        self.port = port
 
-reply = client.sendRequest(sys.argv[1])
-if (not reply):
-    if sys.argv[1] == "test":
-        r = 0
-    else:
-        r = 1
-else:
-    r = 0
-    print(reply)
+    async def setup(self):
+        reader, writer = await asyncio.open_connection(self.host, self.port)
+        self.reader = reader
+        self.writer = writer
 
-client.bye()
-client.close()
-client.stop()
+    async def close(self):
+        try:
+            self.writer.write((0).to_bytes(1, byteorder='big'))
+            await self.reader.readexactly(1)
+        finally:
+            self.writer.close()
+        await self.writer.wait_closed()
 
-sys.exit(r)
+    async def get(self, ip):
+        ip_sz = len(ip.packed).to_bytes(1, byteorder='big')
+        self.writer.write(ip_sz)
+        self.writer.write(ip.packed)
+        domain_sz = int.from_bytes(await self.reader.readexactly(1), byteorder='big')
+        if domain_sz == 0:
+            domain = None
+        else:
+            domain = (await self.reader.readexactly(domain_sz)).decode('utf-8')
+        return domain
+
+async def main():
+    if len(sys.argv) != 2:
+        raise Exception("Please specify ip")
+    ip = ipaddress.ip_address(sys.argv[1])
+
+    client = BindrevClient()
+    try:
+        await client.setup()
+        domain = await client.get(ip)
+        if domain is None:
+            return 1
+        else:
+            print(domain)
+            return 9
+    finally:
+        await client.close()
+
+if __name__ == '__main__':
+    sys.exit(asyncio.get_event_loop().run_until_complete(main()))

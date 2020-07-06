@@ -10,13 +10,7 @@ import dns.rdatatype
 import ipaddress
 import uvloop
 import mysql.connector as mysql
-
 import sys 
-sys.path.append("/home/drew/src/arpc")
-import arpc
-import arpc.arpc
-
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s]: %(message)s')
 
 class BufferedDb:
 
@@ -164,8 +158,8 @@ class ReverseLookup:
             logging.debug("Creating %s -> %s [count=%s]" % (ip, domain, 0))
             self.db[ip] = domain
 
-    def get(self, ip_):
-        ip = ipaddress.ip_address(ip_).compressed
+    def get(self, ip):
+        ip = ip.compressed
         if ip in self.db:
             domain = self.db[ip]
             return domain
@@ -181,10 +175,10 @@ class Tapper:
     async def loop(self):
         async def process(reader):
             while True:
-                ip_sz = int.from_bytes(await reader.readexactly(1), byteorder='big')
-                ip = ipaddress.ip_address(await reader.readexactly(ip_sz))
                 domain_sz = int.from_bytes(await reader.readexactly(1), byteorder='big')
                 domain = (await reader.readexactly(domain_sz)).decode('utf-8')
+                ip_sz = int.from_bytes(await reader.readexactly(1), byteorder='big')
+                ip = ipaddress.ip_address(await reader.readexactly(ip_sz))
                 try:
                     await self.callback(domain, ip)
                 except Exception as e:
@@ -197,6 +191,39 @@ class Tapper:
             except (ConnectionRefusedError, asyncio.streams.IncompleteReadError) as e:
                 logging.error(e)
             await asyncio.sleep(1)
+
+class BindrevServer:
+
+    test_ip = ipaddress.ip_address('127.0.0.1')
+
+    def __init__(self, lookup, host='0.0.0.0', port=8888):
+        self.lookup = lookup
+        self.host = host
+        self.port = port
+
+    async def setup(self):
+        async def handle(reader, writer):
+            try:
+                while True:
+                    ip_sz = int.from_bytes(await reader.readexactly(1), byteorder='big')
+                    if ip_sz == 0:
+                        writer.write((0).to_bytes(1, byteorder='big'))
+                        break
+                    ip = ipaddress.ip_address(await reader.readexactly(ip_sz))
+                    if ip == BindrevServer.test_ip:
+                        domain = 'localhost'
+                    else:
+                        domain = self.lookup.get(ip)
+                    if domain is None:
+                        writer.write((0).to_bytes(1, byteorder='big'))
+                    else:
+                        domain_sz = len(domain).to_bytes(1, byteorder='big')
+                        writer.write(domain_sz)
+                        writer.write(domain.encode('utf-8'))
+            finally:
+                writer.close()
+
+        await asyncio.start_server(handle, self.host, self.port)
 
 async def setup():
     db = BufferedDb(MyDb())
@@ -217,14 +244,8 @@ async def setup():
     tapper = Tapper(tapper_callback)
     asyncio.create_task(tapper.loop())
 
-    async def arpc_callback(session, ip):
-        if ip == "test":
-            return None
-        return lookup.get(ip)
-
-    loop = asyncio.get_event_loop()
-    requestServer = arpc.arpc.ArpcServer(loop, '0.0.0.0', 8888, arpc_callback)
-    await requestServer.start()
+    revserver = BindrevServer(lookup)
+    await revserver.setup()
 
     def signal_handler(sig, frame):
         db.close()
@@ -234,6 +255,8 @@ async def setup():
     signal.signal(signal.SIGTERM, signal_handler)
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s]: %(message)s')
+
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
     loop = asyncio.get_event_loop()
 
