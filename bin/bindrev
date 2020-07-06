@@ -200,6 +200,8 @@ class BindrevServer:
         await asyncio.start_server(handle, self.host, self.port)
 
 async def main():
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s]: %(message)s')
+
     db = BufferedDb(MyDb())
     async def flusher():
         while True:
@@ -230,5 +232,4 @@ async def main():
     await finish.wait()
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s]: %(message)s')
     asyncio.run(main())
