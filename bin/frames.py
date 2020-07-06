@@ -79,30 +79,33 @@ class UnixFrameStreamServer:
         await asyncio.start_unix_server(self.__handle__, path=self.path)
 
     async def __handle__(self, reader, writer):
-        bi = True
-        processStream = True
-        while processStream:
-            frame = await Frame.decodeFromWire(reader)
-            if (frame.type == Frame.control):
-                if (frame.control_type == ControlFrame.start):
-                    pass
-                elif (frame.control_type == ControlFrame.stop):
-                    if (bi):
-                        finish = ControlFrame(ControlFrame.finish)
-                        await finish.encodeToWire(writer)
-                    processStream = False
-                elif (frame.control_type == ControlFrame.ready):
-                    if (bi):
-                        accept = ControlFrame(ControlFrame.accept)
-                        await accept.encodeToWire(writer)
+        try:
+            bi = True
+            processStream = True
+            while processStream:
+                frame = await Frame.decodeFromWire(reader)
+                if (frame.type == Frame.control):
+                    if (frame.control_type == ControlFrame.start):
+                        pass
+                    elif (frame.control_type == ControlFrame.stop):
+                        if (bi):
+                            finish = ControlFrame(ControlFrame.finish)
+                            await finish.encodeToWire(writer)
+                        processStream = False
+                    elif (frame.control_type == ControlFrame.ready):
+                        if (bi):
+                            accept = ControlFrame(ControlFrame.accept)
+                            await accept.encodeToWire(writer)
+                    else:
+                        raise Exception("Unexpected control frame: %s" % type(frame))
+                elif (frame.type == Frame.data):
+                    try:
+                        await self.callback(frame)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logging.error(e)
                 else:
-                    raise Exception("Unexpected control frame: %s" % type(frame))
-            elif (frame.type == Frame.data):
-                try:
-                    await self.callback(frame)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    logging.error(e)
-            else:
-                raise Exception("Unknown frame type: %s" % type(frame))
+                    raise Exception("Unknown frame type: %s" % type(frame))
+        finally:
+            writer.close()

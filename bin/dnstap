@@ -56,7 +56,7 @@ def process_frame(frame):
 
 class Spanner:
 
-    def __init__(self):
+    def __init__(self, host='0.0.0.0', port=8765):
         self.queues = []
 
     async def add(self, lookups):
@@ -86,7 +86,7 @@ class Spanner:
                 self.queues.remove(queue)
                 writer.close()
 
-        await asyncio.start_server(handle, '0.0.0.0', 8765)
+        await asyncio.start_server(handle, self.host, self.port)
 
 async def setup():
     spanner = Spanner()
