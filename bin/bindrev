@@ -11,6 +11,7 @@ import ipaddress
 import uvloop
 import mysql.connector as mysql
 import sys 
+import dnstap_client
 
 class BufferedDb:
 
@@ -165,51 +166,17 @@ class ReverseLookup:
             return domain
         return None
 
-class Tapper:
-
-    def __init__(self, callback, host='127.0.0.1', port=8765):
-        self.callback = callback
-        self.host = host
-        self.port = port
-
-    async def loop(self):
-        async def process(reader):
-            while True:
-                domain_sz = int.from_bytes(await reader.readexactly(1), byteorder='big')
-                domain = (await reader.readexactly(domain_sz)).decode('utf-8')
-                ip_sz = int.from_bytes(await reader.readexactly(1), byteorder='big')
-                ip = ipaddress.ip_address(await reader.readexactly(ip_sz))
-                try:
-                    await self.callback(domain, ip)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    logging.error(e)
-
-        while True:
-            try:
-                writer = None
-                reader, writer = await asyncio.open_connection(self.host, self.port)
-                await process(reader)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logging.error(e)
-            finally:
-                if not writer is None:
-                    writer.close()
-            await asyncio.sleep(1)
-
 class BindrevServer:
 
     test_ip = ipaddress.ip_address('127.0.0.1')
+    test_domain = 'localhost.'
 
     def __init__(self, lookup, host='0.0.0.0', port=8888):
         self.lookup = lookup
         self.host = host
         self.port = port
 
-    async def setup(self):
+    async def start(self):
         async def handle(reader, writer):
             try:
                 while True:
@@ -219,7 +186,7 @@ class BindrevServer:
                         break
                     ip = ipaddress.ip_address(await reader.readexactly(ip_sz))
                     if ip == BindrevServer.test_ip:
-                        domain = 'localhost.'
+                        domain = BindrevServer.test_domain
                     else:
                         domain = self.lookup.get(ip)
                     if domain is None:
@@ -249,11 +216,11 @@ async def setup():
     async def tapper_callback(domain, ip):
         lookup.add(ip, domain)
 
-    tapper = Tapper(tapper_callback)
+    tapper = dnstap_client.Tapper(tapper_callback)
     asyncio.create_task(tapper.loop())
 
     revserver = BindrevServer(lookup)
-    await revserver.setup()
+    await revserver.start()
 
     def signal_handler(sig, frame):
         db.close()

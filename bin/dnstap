@@ -45,7 +45,9 @@ def process_frame(frame):
                 for item in linker[name]:
                     itemname = str(item)
                     if (item.rdtype in [dns.rdatatype.A, dns.rdatatype.AAAA]):
-                        lookups.append((questionname, itemname,))
+                        domain = questionname
+                        ip = ipaddress.ip_address(itemname)
+                        lookups.append((domain, ip,))
                     elif (item.rdtype in [dns.rdatatype.PTR, dns.rdatatype.CNAME]):
                         q.append(itemname)
                     else:
@@ -55,56 +57,40 @@ def process_frame(frame):
 class Spanner:
 
     def __init__(self):
-        self.queue = asyncio.Queue()
-        self.writers = []
+        self.queues = []
 
     async def add(self, lookups):
-        await self.queue.put(lookups)
+        # TODO, i can save some compute
+        # if i create the size/encodings up front
+        for (domain, ip) in lookups:
+            logging.debug("%s = %s" % (domain, ip))
+        for queue in self.queues:
+            await queue.put(lookups)
 
-    async def setup(self):
+    async def start(self):
         async def handle(reader, writer):
-            self.writers.append(writer)
+            try:
+                queue = asyncio.Queue()
+                self.queues.append(queue)
+                while True:
+                    lookups = await queue.get()
+                    for (domain, ip) in lookups:
+                        domain_sz = len(domain).to_bytes(1, byteorder='big')
+                        writer.write(domain_sz)
+                        writer.write(domain.encode('utf-8'))
+                        ip_sz = len(ip.packed).to_bytes(1, byteorder='big')
+                        writer.write(ip_sz)
+                        writer.write(ip.packed)
+                        await writer.drain()
+            finally:
+                self.queues.remove(queue)
+                writer.close()
 
         await asyncio.start_server(handle, '0.0.0.0', 8765)
 
-    async def loop(self):
-        while True:
-            lookups = await self.queue.get()
-            to_close = set()
-            for (raw_domain, raw_ip) in lookups:
-                logging.debug("%s = %s" % (raw_domain, raw_ip))
-                domain = raw_domain.encode('utf-8')
-                domain_sz = len(domain).to_bytes(1, byteorder='big')
-                ip = ipaddress.ip_address(raw_ip).packed
-                ip_sz = len(ip).to_bytes(1, byteorder='big')
-                for writer in self.writers:
-                    try:
-                        writer.write(domain_sz)
-                        writer.write(domain)
-                        writer.write(ip_sz)
-                        writer.write(ip)
-                    except Exception as e:
-                        logging.error(e)
-                        to_close.add(writer)
-            for writer in self.writers:
-                try:
-                    await writer.drain()
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    logging.error(e)
-                    to_close.add(writer)
-            for writer in to_close:
-                try:
-                    writer.close()
-                except Exception as e:
-                    logging.error(e)
-                self.writers.remove(writer)
-
 async def setup():
     spanner = Spanner()
-    await spanner.setup()
-    asyncio.create_task(spanner.loop())
+    await spanner.start()
 
     async def frame_callback(frame):
         lookups = process_frame(frame)

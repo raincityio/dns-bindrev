@@ -10,7 +10,7 @@ class BindrevClient:
         self.host = host
         self.port = port
 
-    async def setup(self):
+    async def open(self):
         reader, writer = await asyncio.open_connection(self.host, self.port)
         self.reader = reader
         self.writer = writer
@@ -35,7 +35,7 @@ class BindrevClient:
         return domain
 
     async def __aenter__(self):
-        await self.setup()
+        await self.open()
         return self
 
     async def __aexit__(self, *args):

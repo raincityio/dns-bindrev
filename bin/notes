@@ -1,0 +1,3 @@
+will all writes to a stream go out when close is called?
+
+should streams be handled like files and be explicitily closed when no longer needed?
