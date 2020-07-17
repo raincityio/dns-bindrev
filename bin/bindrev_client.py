@@ -3,6 +3,7 @@
 import sys
 import ipaddress
 import asyncio
+import argparse
 
 class BindrevClient:
 
@@ -42,6 +43,21 @@ class BindrevClient:
         await self.close()
 
 async def main():
+    async with BindrevClient() as client:
+        while True:
+            line = sys.stdin.readline()
+            if len(line) == 0:
+                break
+            line = line.strip()
+            if len(line) == 0:
+                continue
+            try:
+                ip = ipaddress.ip_address(line)
+                print(await client.get(ip))
+            except Exception as e:
+                print(e)
+
+async def __main():
     if len(sys.argv) != 2:
         raise Exception("Please specify ip")
     ip = ipaddress.ip_address(sys.argv[1])
@@ -53,4 +69,4 @@ async def main():
             print(domain)
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    asyncio.run(__main())
