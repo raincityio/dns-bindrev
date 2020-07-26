@@ -10,6 +10,7 @@ import dns.message
 import dns.rdatatype
 import ipaddress
 import mysql.connector as mysql
+import aiomysql
 import dnstap_client
 import argparse
 
@@ -21,42 +22,29 @@ class BufferedDb:
         self.db = db
         self.ips = {}
 
-    def close(self):
-        self.flush()
-        self.db.close()
+    async def close(self):
+        await self.flush()
+        await self.db.close()
 
-    def __getitem__(self, key):
-        if key in self.ips:
-            for kv in self.ips[key].items():
-                if kv[1] == True:
-                    return kv[0]
-            raise Exception("key present, but latest not found") 
+    async def get(self, ip):
+        if ip in self.ips:
+            for (domain, latest) in self.ips[ip].items():
+                if latest:
+                    return domain
+            raise Exception("ip present, but latest not found") 
         else:
-            return self.db[key]
+            return await self.db.get(ip)
 
-    def __setitem__(self, key, value):
-        if key in self.ips:
-            self.ips[key][value] = True
-            for domain in self.ips[key]:
-                if domain != value:
-                    self.ips[key][domain] = False
-        else:
-            self.ips[key] = {
-                value: True
-            }
+    async def set_all(self, items):
+        for (ip, domain) in items:
+            if not ip in self.ips:
+                self.ips[ip] = {}
+            self.ips[ip][domain] = True
+            for x in self.ips[ip]:
+                if x != domain:
+                    self.ips[ip][x] = False
 
-    def set_items(self, items):
-        for (key, value) in items:
-            self[key] = value
-
-    def __contains__(self, key):
-        try:
-            self.__getitem__(key)
-            return True
-        except KeyError:
-            return False
-
-    def flush(self):
+    async def flush(self):
         updates = []
         for ip in self.ips:
             for (domain, latest) in self.ips[ip].items():
@@ -65,7 +53,7 @@ class BufferedDb:
                 else:
                     updates.append((ip, domain,))
             updates.append((ip, latest_domain,))
-        self.db.set_items(updates)
+        await self.db.set_all(updates)
         self.ips = {}
 
 class MyDb:
@@ -77,56 +65,66 @@ class MyDb:
         self.password = password
         self.con = None
 
-    def close(self):
+    async def close(self):
         if not self.con is None:
             self.con.close()
 
     def __getcon__(self):
+        # TODO, mysql is not threadsafe, so because
+        # mysql commands are executed in different threads,
+        # we need a new connection every time
+        return mysql.connect(host=self.host, user=self.user, password=self.password, database=self.db, auth_plugin='mysql_native_password')
         if self.con is None:
             con = mysql.connect(host=self.host, user=self.user, password=self.password, database=self.db, auth_plugin='mysql_native_password')
             self.con = con
         return self.con
 
     def __reset__(self):
+        if self.con is not None:
+            try:
+                # TODO, should this be async?
+                self.con.close()
+            except Exception as e:
+                logging.error(e)
         self.con = None
 
-    def __getitem__(self, key):
+    async def get(self, ip):
+        loop = asyncio.get_event_loop()
         try:
-            con = self.__getcon__()
-            curs = con.cursor()
-            curs.execute("SELECT domain FROM ips WHERE ip = %s AND latest = TRUE", (key,))
-            results = curs.fetchall()
+            return await loop.run_in_executor(None, self._get, ip)
         except:
             self.__reset__()
             raise
 
+    def _get(self, ip):
+        con = self.__getcon__()
+        curs = con.cursor()
+        curs.execute("SELECT domain FROM ips WHERE ip = %s AND latest = TRUE", (str(ip),))
+        results = curs.fetchall()
         if len(results) == 0:
             raise KeyError
         return results[0][0]
 
-    def __setitem__(self, key, value):
-        self.set_items([(key, value,)])
-
-    def set_items(self, items):
+    async def set_all(self, items):
+        loop = asyncio.get_event_loop()
         start = time.time()
         try:
-            con = self.__getcon__()
-            curs = con.cursor()
-            self._set_items(curs, items)
-            con.commit()
+            await loop.run_in_executor(None, self._set_all, items)
         except:
             self.__reset__()
             raise
         stop = time.time()
-        logging.debug("set_items(size=%s): %s" % (len(items), stop - start))
+        logging.debug("set_all(size=%s): %s" % (len(items), stop - start))
 
-    def _set_items(self, curs, items):
-        for (key, value) in items:
-            curs.execute("SELECT id, latest FROM bindrev.ips WHERE ip = %s AND domain = %s", (key, value,))
+    def _set_all(self, items):
+        con = self.__getcon__()
+        curs = con.cursor()
+        for (ip, domain) in items:
+            curs.execute("SELECT id, latest FROM bindrev.ips WHERE ip = %s AND domain = %s", (str(ip), domain,))
             results = curs.fetchall()
             update_others = False
             if len(results) == 0:
-                curs.execute("INSERT INTO bindrev.ips (ip, domain, latest) VALUES (%s, %s, TRUE)", (key, value,))
+                curs.execute("INSERT INTO bindrev.ips (ip, domain, latest) VALUES (%s, %s, TRUE)", (str(ip), domain,))
                 update_others = True
             elif len(results) == 1:
                 _id = results[0][0]
@@ -137,39 +135,31 @@ class MyDb:
             else:
                 raise Exception("unexpected result count")
             if update_others:
-                curs.execute("UPDATE bindrev.ips SET latest = FALSE WHERE ip = %s AND domain <> %s", (key, value,))
+                curs.execute("UPDATE bindrev.ips SET latest = FALSE WHERE ip = %s AND domain <> %s", (str(ip), domain,))
+        con.commit()
      
-    def __contains__(self, key):
-        try:
-            self.__getitem__(key)
-            return True
-        except KeyError:
-            return False 
-
 class ReverseLookup:
 
     def __init__(self, db):
         self.db = db
 
-    def add(self, ip_, domain):
-        ip = ip_.compressed
-        if ip in self.db:
-            current = self.db[ip]
+    async def add(self, ip, domain):
+        try:
+            current = await self.get(ip)
             if current == domain:
-                logging.debug("Keeping %s[%s] -> %s [count=%s]" % (ip, current, domain, 0))
+                logging.debug("Keeping %s[%s] -> %s" % (ip, current, domain))
             else:
-                logging.debug("Updating %s[%s] -> %s [count=%s]" % (ip, current, domain, 0))
-                self.db[ip] = domain
-        else:
-            logging.debug("Creating %s -> %s [count=%s]" % (ip, domain, 0))
-            self.db[ip] = domain
+                logging.debug("Updating %s[%s] -> %s" % (ip, current, domain))
+                await self.db.set_all([(ip, domain,)])
+        except KeyError:
+            logging.debug("Creating %s -> %s" % (ip, domain))
+            await self.db.set_all([(ip, domain,)])
 
-    def get(self, ip):
-        ip = ip.compressed
-        if ip in self.db:
-            domain = self.db[ip]
-            return domain
-        return None
+    async def get(self, ip):
+        try:
+            return await self.db.get(ip)
+        except KeyError:
+            return None
 
 class BindrevServer:
 
@@ -193,7 +183,7 @@ class BindrevServer:
                     if ip == BindrevServer.test_ip:
                         domain = BindrevServer.test_domain
                     else:
-                        domain = self.lookup.get(ip)
+                        domain = await self.lookup.get(ip)
                     if domain is None:
                         writer.write((0).to_bytes(1, byteorder='big'))
                     else:
@@ -206,7 +196,8 @@ class BindrevServer:
         await asyncio.start_server(handle, self.host, self.port)
 
 async def main():
-#`    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s]: %(message)s')
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s]: %(message)s')
+
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', default=default_config_file, help='config file')
     args = parser.parse_args()
@@ -223,9 +214,9 @@ async def main():
     db = BufferedDb(mydb)
     async def flusher():
         while True:
-            await asyncio.sleep(60)
+            await asyncio.sleep(5)
             try:
-                db.flush()
+                await db.flush()
             except Exception as e:
                 logging.error(e)
     asyncio.create_task(flusher())
@@ -233,7 +224,7 @@ async def main():
     lookup = ReverseLookup(db)
 
     async def tapper_callback(domain, ip):
-        lookup.add(ip, domain)
+        await lookup.add(ip, domain)
 
     tapper = dnstap_client.Tapper(tapper_callback)
     asyncio.create_task(tapper.loop())
@@ -247,7 +238,11 @@ async def main():
     loop = asyncio.get_event_loop()
     loop.add_signal_handler(signal.SIGINT, signal_handler)
     loop.add_signal_handler(signal.SIGTERM, signal_handler)
-    await finish.wait()
+
+    try:
+        await finish.wait()
+    finally:
+        await db.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
