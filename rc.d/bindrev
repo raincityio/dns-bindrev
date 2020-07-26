@@ -5,20 +5,20 @@
 
 . /etc/rc.subr
 
+load_rc_config $name
+
 fail() { echo $@>&2; exit 1; }
 
-if [ -f /usr/local/etc/bindrev.rc ]; then
-    . /usr/local/etc/bindrev.rc
-fi
+test -n "$dnstap_home" || fail "dnstap_home not defined"
+export PYTHONPATH=$dnstap_home/bin:$PYTHONPATH
+test -n "$bindrev_home" || fail "bindrev_home not defined"
+test -n "$bindrev_config" || fail "bindrev_config not defined"
 
-test -n "$BINDREV_HOME" || fail "BINDREV_HOME not set"
-test -n "$BINDREV_CONFIG" || fail "BINDREV_CONFIG not set"
-
-export PATH=/usr/local/bin:$PATH
 name="bindrev"
 pidfile="/var/run/bindrev.pid"
 command="/usr/sbin/daemon"
-command_args="-c -r -t $name -S -T $name -P $pidfile $BINDREV_HOME/bin/bindrev -c $BINDREV_CONFIG"
+command_args="-c -r -t $name -S -T $name -P $pidfile $bindrev_home/bin/bindrev -c $bindrev_config"
 
-load_rc_config $name
+export PATH=/usr/local/bin:$PATH
+
 run_rc_command "$1"
