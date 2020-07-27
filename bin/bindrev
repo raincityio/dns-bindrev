@@ -19,41 +19,42 @@ class BufferedDb:
 
     def __init__(self, db):
         self.db = db
-        self.ips = {}
+        self.cache = {}
+        self.updates = {}
 
     async def close(self):
-        await self.flush()
-        await self.db.close()
+        try:
+            await self.flush()
+        finally:
+            await self.db.close()
 
     async def get(self, ip):
-        if ip in self.ips:
-            for (domain, latest) in self.ips[ip].items():
-                if latest:
-                    return domain
-            raise Exception("ip present, but latest not found") 
+        if ip in self.cache:
+            return self.cache[ip]
         else:
-            return await self.db.get(ip)
+            domain = await self.db.get(ip)
+            self.cache[ip] = domain
+            return domain
 
     async def set_all(self, items):
         for (ip, domain) in items:
-            if not ip in self.ips:
-                self.ips[ip] = {}
-            self.ips[ip][domain] = True
-            for x in self.ips[ip]:
-                if x != domain:
-                    self.ips[ip][x] = False
+            if ip in self.cache:
+                if domain != self.cache[ip]:
+                    update = True
+            else:
+                update = True
+            if update:
+                self.cache[ip] = domain
+                self.updates[ip] = domain
 
+    # TODO, flush will lost local updates
+    # if the underlying db is down, to fix
+    # this would require locking or merging
+    # back again in a finally
     async def flush(self):
-        updates = []
-        for ip in self.ips:
-            for (domain, latest) in self.ips[ip].items():
-                if latest:
-                    latest_domain = domain
-                else:
-                    updates.append((ip, domain,))
-            updates.append((ip, latest_domain,))
-        await self.db.set_all(updates)
-        self.ips = {}
+        updates = self.updates
+        self.updates = {}
+        await self.db.set_all(updates.items())
 
 class MyDb:
 
@@ -73,7 +74,7 @@ class MyDb:
         if self.pool is None:
             self.pool = await aiomysql.create_pool(
                     host=self.host, port=3306, user=self.user,
-                    password=self.password, db=self.db)
+                    password=self.password, db=self.db, echo=True)
         return self.pool
 
     async def get(self, ip):
@@ -91,11 +92,12 @@ class MyDb:
 
     async def set_all(self, items):
         start = time.time()
-        pool = await self.__getpool__()
-        async with pool.acquire() as conn:
-            async with conn.cursor() as curs:
-                await self._set_all(curs, items)
-            await conn.commit()
+        if len(items) != 0:
+            pool = await self.__getpool__()
+            async with pool.acquire() as conn:
+                async with conn.cursor() as curs:
+                    await self._set_all(curs, items)
+                await conn.commit()
         stop = time.time()
         logging.debug("set_all(size=%s): %s" % (len(items), stop - start))
 
