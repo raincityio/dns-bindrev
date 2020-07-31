@@ -33,43 +33,35 @@ class BufferedDb:
             return self.cache[ip]
         else:
             domain = await self.db.get(ip)
-            self.cache[ip] = domain
+            if domain is not None:
+                self.cache[ip] = domain
             return domain
 
     async def set_all(self, items):
         for (ip, domain) in items:
             if ip in self.updates:
-                update = self.updates[ip]
-                self.updates[ip] = (domain, update[1],)
+                current = self.updates[ip]
+                if domain == current:
+                    del self.updates[ip]
             else:
-                try:
-                    cached = await self.get(ip)
-                    self.updates[ip] = (domain, cached,)
-                except KeyError:
-                    self.updates[ip] = (domain, None,)
+                if ip in self.cache:
+                    cached = self.cache[ip]
+                    if domain != cached:
+                        self.updates[ip] = cached 
+                else:
+                    self.updates[ip] = None
             self.cache[ip] = domain
 
-    # TODO, flush will lost local updates
-    # if the underlying db is down, to fix
-    # this would require locking or merging
-    # back again in a finally
     async def flush(self):
-        updates = self.updates
-        self.updates = {}
         items = []
-        for (ip, update) in updates.items():
-            if update[0] != update[1]:
-                items.append((ip, update[0],))
-        try:
-            await self.db.set_all(items)
-        except:
-            for (ip, update) in updates.items():
-                if ip in self.updates:
-                    current = self.updates[ip]
-                    self.updates[ip] = (current[0], update[1])
-                else:
-                    self.updates[ip] = update
-            raise
+        for ip in self.updates.keys():
+            cached = self.cache[ip]
+            items.append((ip, cached,))
+        await self.db.set_all(items)
+        for (ip, update) in items:
+            cached = self.cache[ip]
+            if update == cached:
+                del self.updates[ip]
 
 class MyDb:
 
@@ -102,7 +94,7 @@ class MyDb:
         await curs.execute("SELECT domain FROM ips WHERE ip = %s AND latest = TRUE", (str(ip),))
         results = await curs.fetchall()
         if len(results) == 0:
-            raise KeyError
+            return None
         return results[0][0]
 
     async def set_all(self, items):
@@ -140,23 +132,24 @@ class ReverseLookup:
     def __init__(self, db):
         self.db = db
 
-    async def add(self, ip, domain):
-        try:
+    async def close(self):
+        await self.db.close()
+
+    async def set_all(self, items):
+        for (ip, domain) in items:
             current = await self.db.get(ip)
-            if current == domain:
-                logging.debug("Keeping %s[%s] -> %s" % (ip, current, domain))
-            else:
-                logging.debug("Updating %s[%s] -> %s" % (ip, current, domain))
+            if current is None:
+                logging.debug("Creating %s -> %s" % (ip, domain))
                 await self.db.set_all([(ip, domain,)])
-        except KeyError:
-            logging.debug("Creating %s -> %s" % (ip, domain))
-            await self.db.set_all([(ip, domain,)])
+            else:
+                if current == domain:
+                    logging.debug("Keeping %s[%s] -> %s" % (ip, current, domain))
+                else:
+                    logging.debug("Updating %s[%s] -> %s" % (ip, current, domain))
+                    await self.db.set_all([(ip, domain,)])
 
     async def get(self, ip):
-        try:
-            return await self.db.get(ip)
-        except KeyError:
-            return None
+        return await self.db.get(ip)
 
 class BindrevServer:
 
@@ -208,20 +201,22 @@ async def main():
     my_password = config['my_password']
     mydb = MyDb(my_host, my_db, my_user, my_password)
 
-    db = BufferedDb(mydb)
+    bdb = BufferedDb(mydb)
     async def flusher():
         while True:
             await asyncio.sleep(5)
             try:
-                await db.flush()
+                await bdb.flush()
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logging.error(e)
-    asyncio.create_task(flusher())
+    flusher_task = asyncio.create_task(flusher())
 
-    lookup = ReverseLookup(db)
+    lookup = ReverseLookup(bdb)
 
     async def tapper_callback(domain, ip):
-        await lookup.add(ip, domain)
+        await lookup.set_all([(ip, domain)])
 
     tapper = dnstap_client.Tapper(tapper_callback)
     asyncio.create_task(tapper.loop())
@@ -236,10 +231,11 @@ async def main():
     loop.add_signal_handler(signal.SIGINT, signal_handler)
     loop.add_signal_handler(signal.SIGTERM, signal_handler)
 
-    try:
-        await finish.wait()
-    finally:
-        await db.close()
+    await finish.wait()
+    flusher_task.cancel()
+    await asyncio.wait([flusher_task])
+    await bdb.flush()
+    await mydb.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
