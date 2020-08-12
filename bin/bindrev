@@ -22,46 +22,38 @@ class BufferedDb:
         self.cache = {}
         self.updates = {}
 
-    async def close(self):
-        try:
-            await self.flush()
-        finally:
-            await self.db.close()
-
     async def get(self, ip):
-        if ip in self.cache:
+        if ip in self.updates:
+            return self.updates[ip]
+        elif ip in self.cache:
             return self.cache[ip]
         else:
             domain = await self.db.get(ip)
             if domain is not None:
-                self.cache[ip] = domain
+                if not ip in self.cache:
+                    self.cache[ip] = domain
             return domain
 
     async def set_all(self, items):
         for (ip, domain) in items:
-            if ip in self.updates:
-                current = self.updates[ip]
-                if domain == current:
-                    del self.updates[ip]
-            else:
-                if ip in self.cache:
-                    cached = self.cache[ip]
-                    if domain != cached:
-                        self.updates[ip] = cached 
+            if ip in self.cache:
+                cached = self.cache[ip]
+                if domain == cached:
+                    if ip in self.updates:
+                        del self.updates[ip]
                 else:
-                    self.updates[ip] = None
-            self.cache[ip] = domain
+                    self.updates[ip] = domain
+            else:
+                self.updates[ip] = domain
 
     async def flush(self):
-        items = []
-        for ip in self.updates.keys():
-            cached = self.cache[ip]
-            items.append((ip, cached,))
+        items = list(self.updates.items())
         await self.db.set_all(items)
         for (ip, update) in items:
-            cached = self.cache[ip]
-            if update == cached:
-                del self.updates[ip]
+            self.cache[ip] = update
+            if ip in self.updates:
+                if self.updates[ip] == update:
+                    del self.updates[ip]
 
 class MyDb:
 
@@ -131,9 +123,6 @@ class ReverseLookup:
 
     def __init__(self, db):
         self.db = db
-
-    async def close(self):
-        await self.db.close()
 
     async def set_all(self, items):
         for (ip, domain) in items:
